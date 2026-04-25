@@ -356,12 +356,16 @@ struct ConnectErrorRes {
     error_description: Option<String>,
     #[serde(rename = "ErrorModel", alias = "errorModel")]
     error_model: Option<ConnectErrorResErrorModel>,
-    #[serde(rename = "TwoFactorProviders2", alias = "twoFactorProviders2")]
-    two_factor_providers: Option<
-        HashMap<
-            TwoFactorProviderType,
-            Option<PublicKeyCredentialRequestOptions>,
-        >,
+    #[serde(rename = "TwoFactorProviders", alias = "twoFactorProviders")]
+    two_factor_providers: Option<Vec<TwoFactorProviderType>>,
+    // TwoFactorProviders2 is the only place the WebAuthn challenge is
+    // delivered; for non-WebAuthn methods the value is `null` and we just
+    // ignore it. Deserialized independently of `two_factor_providers` so
+    // a server that only emits the legacy array (or a malformed challenge
+    // shape) still drives the TOTP/Yubikey/Email paths correctly.
+    #[serde(default, rename = "TwoFactorProviders2", alias = "twoFactorProviders2")]
+    two_factor_providers_data: Option<
+        HashMap<TwoFactorProviderType, Option<PublicKeyCredentialRequestOptions>>,
     >,
     #[serde(
         rename = "SsoEmail2faSessionToken",
@@ -1738,6 +1742,10 @@ fn classify_login_error(error_res: &ConnectErrorRes, code: u16) -> Error {
                 {
                     return Error::TwoFactorRequired {
                         providers: providers.clone(),
+                        providers_data: error_res
+                            .two_factor_providers_data
+                            .clone()
+                            .unwrap_or_default(),
                         sso_email_2fa_session_token: error_res
                             .sso_email_2fa_session_token
                             .clone(),

@@ -49,18 +49,23 @@ pub async fn webauthn(
         }
     };
 
-    let origin = crate::config::Config::load_async()
-        .await
-        .context("failed to load rbw config")?
-        .ui_url();
-    let origin = reqwest::Url::parse(&origin)
-        .context("failed to parse vault url as URL")?;
+    // Derive the origin from the challenge's rp_id rather than rbw's
+    // configured vault URL: the authenticator enforces that origin's host
+    // matches (or is a subdomain of) rp_id, and Bitwarden registers
+    // credentials against the web vault host. Using rp_id directly avoids
+    // mismatches on self-hosted setups where the user's configured ui_url
+    // doesn't line up with the host the credential was registered against.
+    let origin = reqwest::Url::parse(&format!("https://{}", challenge.rp_id))
+        .context("failed to construct webauthn origin from rp_id")?;
 
-    let result = authenticator
-        .perform_auth(origin, challenge, 60_000)
-        .map_err(|e| {
-            anyhow::anyhow!("webauthn authentication failed: {e:?}")
-        })?;
+    // perform_auth is synchronous and blocks for up to the timeout waiting
+    // on USB HID. Use block_in_place so it doesn't stall other tasks on
+    // the tokio worker. The authenticator borrows from `ui`, so we can't
+    // move it across a spawn_blocking boundary.
+    let result = tokio::task::block_in_place(|| {
+        authenticator.perform_auth(origin, challenge, 60_000)
+    })
+    .map_err(|e| anyhow::anyhow!("webauthn authentication failed: {e:?}"))?;
 
     let out = serde_json::to_string(&BitwardenAssertion::from(result))
         .context("failed to serialize webauthn assertion")?;

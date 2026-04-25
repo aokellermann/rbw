@@ -147,6 +147,11 @@ pub async fn login(
                 }
                 Err(rbw::error::Error::TwoFactorRequired {
                     providers,
+                    #[cfg_attr(
+                        not(feature = "webauthn"),
+                        allow(unused_variables)
+                    )]
+                    providers_data,
                     sso_email_2fa_session_token,
                 }) => {
                     let supported_types = vec![
@@ -158,9 +163,16 @@ pub async fn login(
                     ];
 
                     for provider in supported_types {
-                        if let Some(provider_data) = providers.get(&provider)
-                        {
-                            let provider_data = provider_data.clone();
+                        if providers.contains(&provider) {
+                            #[cfg(feature = "webauthn")]
+                            let provider_data = providers_data
+                                .get(&provider)
+                                .cloned()
+                                .flatten();
+                            #[cfg(not(feature = "webauthn"))]
+                            let provider_data: Option<
+                                rbw::api::PublicKeyCredentialRequestOptions,
+                            > = None;
                             if provider
                                 == rbw::api::TwoFactorProviderType::Email
                             {
