@@ -6,7 +6,14 @@ use crate::prelude::*;
 
 use rand::distr::SampleString as _;
 use sha2::Digest as _;
+use std::collections::HashMap;
 use tokio::io::AsyncReadExt as _;
+#[cfg(feature = "webauthn")]
+pub use webauthn_rs_proto::PublicKeyCredentialRequestOptions;
+
+#[cfg(not(feature = "webauthn"))]
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct PublicKeyCredentialRequestOptions {}
 
 use crate::json::{
     DeserializeJsonWithPath as _, DeserializeJsonWithPathAsync as _,
@@ -47,7 +54,7 @@ impl std::fmt::Display for UriMatchType {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum TwoFactorProviderType {
     Authenticator = 0,
     Email = 1,
@@ -65,6 +72,7 @@ impl TwoFactorProviderType {
             Self::Authenticator => "Enter the 6 digit verification code from your authenticator app.",
             Self::Yubikey => "Insert your Yubikey and push the button.",
             Self::Email => "Enter the PIN you received via email.",
+            Self::WebAuthn => "Enter your security key PIN.",
             _ => "Enter the code."
         }
     }
@@ -74,6 +82,7 @@ impl TwoFactorProviderType {
             Self::Authenticator => "Authenticator App",
             Self::Yubikey => "Yubikey",
             Self::Email => "Email Code",
+            Self::WebAuthn => "Security Key PIN",
             _ => "Two Factor Authentication",
         }
     }
@@ -347,8 +356,13 @@ struct ConnectErrorRes {
     error_description: Option<String>,
     #[serde(rename = "ErrorModel", alias = "errorModel")]
     error_model: Option<ConnectErrorResErrorModel>,
-    #[serde(rename = "TwoFactorProviders", alias = "twoFactorProviders")]
-    two_factor_providers: Option<Vec<TwoFactorProviderType>>,
+    #[serde(rename = "TwoFactorProviders2", alias = "twoFactorProviders2")]
+    two_factor_providers: Option<
+        HashMap<
+            TwoFactorProviderType,
+            Option<PublicKeyCredentialRequestOptions>,
+        >,
+    >,
     #[serde(
         rename = "SsoEmail2faSessionToken",
         alias = "ssoEmail2faSessionToken"

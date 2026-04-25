@@ -1,5 +1,9 @@
 use anyhow::Context as _;
+#[cfg(not(feature = "webauthn"))]
+use rbw::api::PublicKeyCredentialRequestOptions;
 use sha2::Digest as _;
+#[cfg(feature = "webauthn")]
+use webauthn_rs_proto::PublicKeyCredentialRequestOptions;
 
 pub async fn register(
     sock: &mut crate::sock::Sock,
@@ -146,13 +150,17 @@ pub async fn login(
                     sso_email_2fa_session_token,
                 }) => {
                     let supported_types = vec![
+                        #[cfg(feature = "webauthn")]
+                        rbw::api::TwoFactorProviderType::WebAuthn,
                         rbw::api::TwoFactorProviderType::Authenticator,
                         rbw::api::TwoFactorProviderType::Yubikey,
                         rbw::api::TwoFactorProviderType::Email,
                     ];
 
                     for provider in supported_types {
-                        if providers.contains(&provider) {
+                        if let Some(provider_data) = providers.get(&provider)
+                        {
+                            let provider_data = provider_data.clone();
                             if provider
                                 == rbw::api::TwoFactorProviderType::Email
                             {
@@ -179,6 +187,7 @@ pub async fn login(
                                 &email,
                                 password.clone(),
                                 provider,
+                                provider_data,
                             )
                             .await?;
                             login_success(
@@ -229,6 +238,8 @@ async fn two_factor(
     email: &str,
     password: rbw::locked::Password,
     provider: rbw::api::TwoFactorProviderType,
+    #[cfg_attr(not(feature = "webauthn"), allow(unused_variables))]
+    provider_data: Option<PublicKeyCredentialRequestOptions>,
 ) -> anyhow::Result<(
     String,
     String,
@@ -247,17 +258,44 @@ async fn two_factor(
         } else {
             None
         };
-        let code = rbw::pinentry::getpin(
-            &config_pinentry().await?,
-            provider.header(),
-            provider.message(),
-            err.as_deref(),
-            environment,
-            provider.grab(),
-        )
-        .await
-        .context("failed to read code from pinentry")?;
-        let code = std::str::from_utf8(code.password())
+        let token = match provider {
+            #[cfg(feature = "webauthn")]
+            rbw::api::TwoFactorProviderType::WebAuthn => {
+                let token_pin = rbw::pinentry::getpin(
+                    &config_pinentry().await?,
+                    provider.header(),
+                    provider.message(),
+                    err.as_deref(),
+                    environment,
+                    provider.grab(),
+                )
+                .await
+                .context("failed to read security key PIN from pinentry")?;
+                let challenge = provider_data.clone().context(
+                    "webauthn challenge missing from server response",
+                )?;
+                let pin_str = std::str::from_utf8(token_pin.password())
+                    .context("security key PIN was not valid utf8")?;
+                match rbw::webauthn::webauthn(challenge, pin_str).await {
+                    Ok(token) => token,
+                    Err(e) => {
+                        err_msg = Some(format!("{e:#}"));
+                        continue;
+                    }
+                }
+            }
+            _ => rbw::pinentry::getpin(
+                &config_pinentry().await?,
+                provider.header(),
+                provider.message(),
+                err.as_deref(),
+                environment,
+                provider.grab(),
+            )
+            .await
+            .context("failed to read code from pinentry")?,
+        };
+        let code = std::str::from_utf8(token.password())
             .context("code was not valid utf8")?;
         match rbw::actions::login(
             email,
