@@ -273,28 +273,16 @@ async fn two_factor(
         let token = match provider {
             #[cfg(feature = "webauthn")]
             rbw::api::TwoFactorProviderType::WebAuthn => {
-                let token_pin = rbw::pinentry::getpin(
-                    &config_pinentry().await?,
-                    provider.header(),
-                    provider.message(),
-                    err.as_deref(),
-                    environment,
-                    provider.grab(),
-                )
-                .await
-                .context("failed to read security key PIN from pinentry")?;
                 let challenge = provider_data.clone().context(
                     "webauthn challenge missing from server response",
                 )?;
-                let pin_str = std::str::from_utf8(token_pin.password())
-                    .context("security key PIN was not valid utf8")?;
-                match rbw::webauthn::webauthn(challenge, pin_str).await {
-                    Ok(token) => token,
-                    Err(e) => {
-                        err_msg = Some(format!("{e:#}"));
-                        continue;
-                    }
-                }
+                rbw::webauthn::webauthn(
+                    challenge,
+                    config_pinentry().await?,
+                    environment.clone(),
+                )
+                .await
+                .context("webauthn authentication failed")?
             }
             _ => rbw::pinentry::getpin(
                 &config_pinentry().await?,

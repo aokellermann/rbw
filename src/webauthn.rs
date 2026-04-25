@@ -13,14 +13,16 @@ use crate::locked::Password;
 
 pub async fn webauthn(
     challenge: PublicKeyCredentialRequestOptions,
-    pin: &str,
+    pinentry: String,
+    environment: crate::protocol::Environment,
 ) -> anyhow::Result<Password> {
     let transport = AnyTransport::new()
         .await
         .context("failed to set up webauthn transport")?;
 
-    let ui = Pinentry {
-        pin: pin.to_string(),
+    let ui = Ui {
+        pinentry,
+        environment,
     };
 
     let mut events = transport
@@ -63,7 +65,7 @@ pub async fn webauthn(
     // the tokio worker. The authenticator borrows from `ui`, so we can't
     // move it across a spawn_blocking boundary.
     let result = tokio::task::block_in_place(|| {
-        authenticator.perform_auth(origin, challenge, 60_000)
+        authenticator.perform_auth(origin, challenge, u32::MAX)
     })
     .map_err(|e| anyhow::anyhow!("webauthn authentication failed: {e:?}"))?;
 
@@ -125,13 +127,42 @@ impl From<webauthn_rs_proto::PublicKeyCredential> for BitwardenAssertion {
 }
 
 #[derive(Debug)]
-struct Pinentry {
-    pin: String,
+struct Ui {
+    pinentry: String,
+    environment: crate::protocol::Environment,
 }
 
-impl UiCallback for Pinentry {
+impl UiCallback for Ui {
+    // The library calls this synchronously from inside `perform_auth` only
+    // when the authenticator actually demands a PIN (Required/Preferred
+    // policy, or the key has client_pin set). Bridge into async pinentry
+    // by spawning on the current runtime and waiting on a sync channel —
+    // safe under `block_in_place`, which is how `perform_auth` is invoked.
     fn request_pin(&self) -> Option<String> {
-        Some(self.pin.clone())
+        let pinentry = self.pinentry.clone();
+        let environment = self.environment.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tokio::runtime::Handle::current().spawn(async move {
+            let res = crate::pinentry::getpin(
+                &pinentry,
+                "Security Key PIN",
+                "Enter your security key PIN.",
+                None,
+                &environment,
+                true,
+            )
+            .await;
+            let _ = tx.send(res);
+        });
+        match rx.recv().ok()? {
+            Ok(pw) => std::str::from_utf8(pw.password())
+                .ok()
+                .map(str::to_string),
+            Err(e) => {
+                log::warn!("webauthn: pinentry failed: {e}");
+                None
+            }
+        }
     }
 
     fn request_touch(&self) {
