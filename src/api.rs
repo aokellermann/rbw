@@ -72,7 +72,7 @@ impl TwoFactorProviderType {
             Self::Authenticator => "Enter the 6 digit verification code from your authenticator app.",
             Self::Yubikey => "Insert your Yubikey and push the button.",
             Self::Email => "Enter the PIN you received via email.",
-            Self::WebAuthn => "Enter your security key PIN.",
+            Self::WebAuthn => "Enter your security key PIN, then touch the key when it blinks.",
             _ => "Enter the code."
         }
     }

@@ -36,7 +36,9 @@ pub async fn webauthn(
                 }
             }
             Some(TokenEvent::EnumerationComplete) => {
-                eprintln!("rbw: connect a FIDO2 security key to continue...");
+                log::info!(
+                    "rbw: connect a FIDO2 security key to continue"
+                );
             }
             Some(TokenEvent::Removed(_)) => {}
             None => {
@@ -60,18 +62,61 @@ pub async fn webauthn(
             anyhow::anyhow!("webauthn authentication failed: {e:?}")
         })?;
 
-    // Bitwarden's server expects a slightly different shape than the
-    // webauthn-rs default serialization: `appid` must be `false` (not null)
-    // and the credential field is camelCase `clientDataJson` rather than
-    // `clientDataJSON`. See doy/rbw#116 for context.
-    let out = serde_json::to_string(&result)
-        .context("failed to serialize webauthn assertion")?
-        .replace("\"appid\":null,\"hmac_get_secret\":null", "\"appid\":false")
-        .replace("clientDataJSON", "clientDataJson");
+    let out = serde_json::to_string(&BitwardenAssertion::from(result))
+        .context("failed to serialize webauthn assertion")?;
 
     let mut buf = crate::locked::Vec::new();
     buf.extend(out.as_bytes().iter().copied());
     Ok(Password::new(buf))
+}
+
+// Bitwarden's server expects a slightly different shape than what
+// webauthn-rs-proto serializes by default: the response field is camelCase
+// `clientDataJson` rather than the W3C-spec `clientDataJSON`, and the
+// extensions object must use a non-nullable `appid: bool`. We build a
+// dedicated wire type instead of munging the JSON.
+#[derive(serde::Serialize)]
+struct BitwardenAssertion {
+    id: String,
+    #[serde(rename = "rawId")]
+    raw_id: base64urlsafedata::Base64UrlSafeData,
+    response: BitwardenAssertionResponse,
+    extensions: BitwardenAssertionExtensions,
+    #[serde(rename = "type")]
+    type_: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BitwardenAssertionResponse {
+    authenticator_data: base64urlsafedata::Base64UrlSafeData,
+    client_data_json: base64urlsafedata::Base64UrlSafeData,
+    signature: base64urlsafedata::Base64UrlSafeData,
+    user_handle: Option<base64urlsafedata::Base64UrlSafeData>,
+}
+
+#[derive(serde::Serialize)]
+struct BitwardenAssertionExtensions {
+    appid: bool,
+}
+
+impl From<webauthn_rs_proto::PublicKeyCredential> for BitwardenAssertion {
+    fn from(c: webauthn_rs_proto::PublicKeyCredential) -> Self {
+        Self {
+            id: c.id,
+            raw_id: c.raw_id,
+            response: BitwardenAssertionResponse {
+                authenticator_data: c.response.authenticator_data,
+                client_data_json: c.response.client_data_json,
+                signature: c.response.signature,
+                user_handle: c.response.user_handle,
+            },
+            extensions: BitwardenAssertionExtensions {
+                appid: c.extensions.appid.unwrap_or(false),
+            },
+            type_: c.type_,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -85,7 +130,7 @@ impl UiCallback for Pinentry {
     }
 
     fn request_touch(&self) {
-        eprintln!("rbw: touch your security key to continue...");
+        log::debug!("webauthn: waiting for user presence (touch the key)");
     }
 
     fn fingerprint_enrollment_feedback(

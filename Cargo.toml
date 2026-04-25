@@ -88,6 +88,7 @@ arboard = { version = "3.6.1", default-features = false, features = [
     "wayland-data-control",
 ], optional = true }
 
+base64urlsafedata = { version = "0.5.4", optional = true }
 webauthn-rs = { version = "0.5.4", optional = true }
 webauthn-rs-proto = { version = "0.5.4", optional = true }
 webauthn-authenticator-rs = { version = "0.5.4", default-features = false, features = ["usb"], optional = true }
@@ -96,6 +97,7 @@ webauthn-authenticator-rs = { version = "0.5.4", default-features = false, featu
 default = ["clipboard"]
 clipboard = ["arboard"]
 webauthn = [
+    "dep:base64urlsafedata",
     "dep:webauthn-rs",
     "dep:webauthn-rs-proto",
     "dep:webauthn-authenticator-rs",
