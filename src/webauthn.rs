@@ -143,13 +143,14 @@ impl UiCallback for Ui {
         let environment = self.environment.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         tokio::runtime::Handle::current().spawn(async move {
+            let provider = crate::api::TwoFactorProviderType::WebAuthn;
             let res = crate::pinentry::getpin(
                 &pinentry,
-                "Security Key PIN",
-                "Enter your security key PIN.",
+                provider.header(),
+                provider.message(),
                 None,
                 &environment,
-                true,
+                provider.grab(),
             )
             .await;
             let _ = tx.send(res);
